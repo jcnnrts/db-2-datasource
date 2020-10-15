@@ -1,0 +1,39 @@
+{
+  "type": "datasource",
+  "name": "db-2-datasource",
+  "id": "jcn-db-2-datasource",
+  "metrics": true,
+  "backend": true,
+  "executable": "gpx_db-2-datasource",
+  "info": {
+    "description": "Datasource plugin for Db2 databases",
+    "author": {
+      "name": "Jan Cannaerts",
+      "url": "no-url.be"
+    },
+    "keywords": [
+      "db2"
+    ],
+    "logos": {
+      "small": "img/IBM_logo.svg",
+      "large": "img/IBM_logo.svg"
+    },
+    "links": [
+      {
+        "name": "Website",
+        "url": "https://github.com/grafana/simple-datasource-backend"
+      },
+      {
+        "name": "License",
+        "url": "https://github.com/grafana/simple-datasource-backend/blob/master/LICENSE"
+      }
+    ],
+    "screenshots": [],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "dependencies": {
+    "grafanaVersion": "7.x.x",
+    "plugins": []
+  }
+}
