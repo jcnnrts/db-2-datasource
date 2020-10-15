@@ -1,4 +1,4 @@
-module _/jcn/db-2-datasource
+module _/jcnnrts/db-2-datasource
 
 //module github.com/grafana/simple-datasource-backend
 

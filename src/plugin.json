@@ -1,7 +1,7 @@
 {
   "type": "datasource",
   "name": "db-2-datasource",
-  "id": "jcn-db-2-datasource",
+  "id": "jcnnrts-db-2-datasource",
   "metrics": true,
   "backend": true,
   "executable": "gpx_db-2-datasource",
