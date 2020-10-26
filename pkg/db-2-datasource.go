@@ -65,14 +65,17 @@ func (td *Db2Datasource) QueryData(ctx context.Context, req *backend.QueryDataRe
 		return nil, nil
 	}
 
-	//Do some logging.
+	//Open DB
+	db := instSetting.pool.Open(instSetting.constr, "SetConnMaxLifetime=90")
+	defer db.Close()
+
 	log.DefaultLogger.Info("QueryData() - " + instSetting.name)
 
 	response := backend.NewQueryDataResponse()
 
 	// Loop over queries and execute them individually.
 	for _, q := range req.Queries {
-		res := td.query(ctx, instSetting, q)
+		res := td.query(ctx, db, q)
 
 		// Save the response in a hashmap based on with RefID as identifier
 		response.Responses[q.RefID] = res
@@ -87,7 +90,7 @@ type queryModel struct {
 	QueryText string `json:"queryText"`
 }
 
-func (td *Db2Datasource) query(ctx context.Context, instance *instanceSettings, query backend.DataQuery) backend.DataResponse {
+func (td *Db2Datasource) query(ctx context.Context, db *db2.DBP, query backend.DataQuery) backend.DataResponse {
 	//Prepare response objects.
 	response := backend.DataResponse{}
 	frame := data.NewFrame("response")
@@ -104,13 +107,6 @@ func (td *Db2Datasource) query(ctx context.Context, instance *instanceSettings, 
 		return response
 	}
 
-	//************************************
-	// Db2 stuff
-	//************************************
-	// Open connection from the pool
-	db := instance.pool.Open(instance.constr, "SetConnMaxLifetime=60")
-	defer db.Close()
-
 	// Run the query
 	rows, err := db.Query(qm.QueryText)
 	defer rows.Close()
@@ -118,52 +114,58 @@ func (td *Db2Datasource) query(ctx context.Context, instance *instanceSettings, 
 	if err != nil {
 		log.DefaultLogger.Info("Query() - Failed running query")
 		log.DefaultLogger.Warn(err.Error())
-	} else {
-		//Get names of columns, they will be used as names for the series.
-		colNames, err := rows.Columns()
+		return response
+	}
+
+	//Get names of columns, they will be used as names for the series.
+	colNames, err := rows.Columns()
+	if err != nil {
+		log.DefaultLogger.Warn("Query() - Failed to get rows.Columns()")
+		return response
+	}
+
+	//We use a non-sized slice of pointers to actual variables (in another slice) to get typeless pointers to every column's value in a given row.
+	//The values slice will then contain actual usable values that are returned from the database.
+	colPtrs := make([]interface{}, len(colNames))
+	values := make([]int64, len(colNames)-1)
+
+	var timeColumn time.Time   //Single time value to receive first column of scanned row in.
+	var timeSeries []time.Time //Slice to save those single values from each row.
+
+	dataSeriesMap := make(map[int][]int64) //This map has a slice of int64's for each column, except the first (timeSeries) time column.
+
+	//First column is the time column.
+	colPtrs[0] = &timeColumn
+	// Other columns are always int64.
+	for i := range colNames[1:] {
+		colPtrs[i+1] = &values[i]
+	}
+
+	//Go over each row in the resultset and add its values to the timeseries and the dataseriesMap.
+	for rows.Next() {
+		err = rows.Scan(colPtrs...)
+
 		if err != nil {
-			log.DefaultLogger.Warn("Query() - Failed to get rows.Columns()")
+			log.DefaultLogger.Warn("Query() - Failed to do rows.Scan()")
+			log.DefaultLogger.Warn(err.Error())
+			return response
 		}
 
-		//We use a non-sized slice of pointers to actual variables (in another slice) to get typeless pointers to every column's value in a given row.
-		//The values slice will then contain actual usable values that are returned from the database.
-		colPtrs := make([]interface{}, len(colNames))
-		values := make([]int64, len(colNames)-1)
+		timeSeries = append(timeSeries, timeColumn)
 
-		var timeColumn time.Time   //Single time value to receive first column of scanned row in.
-		var timeSeries []time.Time //Slice to save those single values from each row.
-
-		dataSeriesMap := make(map[int][]int64) //This map has a slice of int64's for each column, except the first (timeSeries) time column.
-
-		//First column is the time column.
-		colPtrs[0] = &timeColumn
-		// Other columns are always int64.
-		for i := range colNames[1:] {
-			colPtrs[i+1] = &values[i]
+		for i, value := range values {
+			dataSeriesMap[i] = append(dataSeriesMap[i], value)
 		}
 
-		for rows.Next() {
-			err = rows.Scan(colPtrs...)
+	}
 
-			if err != nil {
-				log.DefaultLogger.Warn("Query() - Failed to do rows.Scan()")
-			}
+	//Build the response.
+	//Hardcode the timeseries.
+	frame.Fields = append(frame.Fields, data.NewField(colNames[0], nil, timeSeries))
 
-			timeSeries = append(timeSeries, timeColumn)
-
-			for i, value := range values {
-				dataSeriesMap[i] = append(dataSeriesMap[i], value)
-			}
-
-		}
-
-		//Hardcode the timeseries.
-		frame.Fields = append(frame.Fields, data.NewField(colNames[0], nil, timeSeries))
-		//Itterate over the rest of the columns.
-		for i, name := range colNames[1:] {
-			frame.Fields = append(frame.Fields, data.NewField(name, nil, dataSeriesMap[i]))
-		}
-
+	//Itterate over the rest of the columns.
+	for i, name := range colNames[1:] {
+		frame.Fields = append(frame.Fields, data.NewField(name, nil, dataSeriesMap[i]))
 	}
 
 	response.Frames = append(response.Frames, frame)
@@ -264,7 +266,7 @@ func newDataSourceInstance(setting backend.DataSourceInstanceSettings) (instance
 	log.DefaultLogger.Warn("newDataSourceInstance()", "data", setting.JSONData)
 
 	// Initialize the Db2 connection pool.
-	pl := db2.Pconnect("PoolSize=30")
+	pl := db2.Pconnect("PoolSize=100")
 
 	// Unload the unsecured JSON data in a myDataSourceOptions struct.
 	var dso myDataSourceOptions
