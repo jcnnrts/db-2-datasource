@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"sync"
 	"time"
 
 	_ "database/sql"
@@ -55,31 +57,34 @@ func (td *Db2Datasource) QueryData(ctx context.Context, req *backend.QueryDataRe
 	//Get the instance settingsfor the current instance of the Db2Datasource.
 	instance, err := td.im.Get(req.PluginContext)
 	if err != nil {
-		log.DefaultLogger.Info("Failed getting PluginContext")
+		log.DefaultLogger.Warn("Failed getting PluginContext")
 		return nil, nil
 	}
 
 	instSetting, ok := instance.(*instanceSettings)
 	if !ok {
-		log.DefaultLogger.Info("Failed getting instance settings")
+		log.DefaultLogger.Warn("Failed getting instance settings")
 		return nil, nil
 	}
 
 	//Open DB
+	instSetting.mu.Lock()
 	db := instSetting.pool.Open(instSetting.constr, "SetConnMaxLifetime=90")
-	defer db.Close()
+	instSetting.mu.Unlock()
 
-	log.DefaultLogger.Info("QueryData() - " + instSetting.name)
+	//log.DefaultLogger.Warn("QueryData() - " + instSetting.name)
 
 	response := backend.NewQueryDataResponse()
 
 	// Loop over queries and execute them individually.
 	for _, q := range req.Queries {
-		res := td.query(ctx, db, q)
-
 		// Save the response in a hashmap based on with RefID as identifier
-		response.Responses[q.RefID] = res
+		response.Responses[q.RefID] = td.query(ctx, db, q)
 	}
+
+	instSetting.mu.Lock()
+	db.Close()
+	instSetting.mu.Unlock()
 
 	return response, nil
 }
@@ -112,33 +117,33 @@ func (td *Db2Datasource) query(ctx context.Context, db *db2.DBP, query backend.D
 	defer rows.Close()
 
 	if err != nil {
-		log.DefaultLogger.Info("Query() - Failed running query")
+		log.DefaultLogger.Warn("Query() - Failed running query")
 		log.DefaultLogger.Warn(err.Error())
+		response.Error = err
 		return response
 	}
 
-	//Get names of columns, they will be used as names for the series.
-	colNames, err := rows.Columns()
+	//Get names & types of columns, they will be used as names for the series.
+	columns, err := rows.ColumnTypes()
 	if err != nil {
-		log.DefaultLogger.Warn("Query() - Failed to get rows.Columns()")
+		log.DefaultLogger.Warn("Query() - Failed to get rows.ColumnTypes()")
+		response.Error = err
 		return response
 	}
 
-	//We use a non-sized slice of pointers to actual variables (in another slice) to get typeless pointers to every column's value in a given row.
-	//The values slice will then contain actual usable values that are returned from the database.
-	colPtrs := make([]interface{}, len(colNames))
-	values := make([]int64, len(colNames)-1)
+	//Make a Field in our frame for every column we have to send back.
+	for _, column := range columns {
+		frame.Fields = append(frame.Fields, data.NewField(column.Name(), nil, getArrayOfType(column.ScanType())))
+	}
 
-	var timeColumn time.Time   //Single time value to receive first column of scanned row in.
-	var timeSeries []time.Time //Slice to save those single values from each row.
+	//Make an array of interfaces (values) because we don't know what types the returns are.
+	//Then make an array of pointers, because rows.Scan() only takes pointers.
+	colPtrs := make([]interface{}, len(columns))
+	values := make([]interface{}, len(columns))
 
-	dataSeriesMap := make(map[int][]int64) //This map has a slice of int64's for each column, except the first (timeSeries) time column.
-
-	//First column is the time column.
-	colPtrs[0] = &timeColumn
-	// Other columns are always int64.
-	for i := range colNames[1:] {
-		colPtrs[i+1] = &values[i]
+	//Point the pointers to our values
+	for i := range columns {
+		colPtrs[i] = &values[i]
 	}
 
 	//Go over each row in the resultset and add its values to the timeseries and the dataseriesMap.
@@ -148,29 +153,41 @@ func (td *Db2Datasource) query(ctx context.Context, db *db2.DBP, query backend.D
 		if err != nil {
 			log.DefaultLogger.Warn("Query() - Failed to do rows.Scan()")
 			log.DefaultLogger.Warn(err.Error())
-			return response
+
+			emptyResponse := backend.DataResponse{}
+			emptyResponse.Error = err
+
+			return emptyResponse
 		}
 
-		timeSeries = append(timeSeries, timeColumn)
-
-		for i, value := range values {
-			dataSeriesMap[i] = append(dataSeriesMap[i], value)
-		}
-
-	}
-
-	//Build the response.
-	//Hardcode the timeseries.
-	frame.Fields = append(frame.Fields, data.NewField(colNames[0], nil, timeSeries))
-
-	//Itterate over the rest of the columns.
-	for i, name := range colNames[1:] {
-		frame.Fields = append(frame.Fields, data.NewField(name, nil, dataSeriesMap[i]))
+		frame.AppendRow(values...)
 	}
 
 	response.Frames = append(response.Frames, frame)
-
 	return response
+}
+
+func getArrayOfType(typ reflect.Type) interface{} {
+	//log.DefaultLogger.Debug("getArrayOfType", "type", typ.String())
+
+	switch t := typ.String(); t {
+	case "timestamp", "time.Time":
+		return []time.Time{}
+	case "bigint", "int", "int64":
+		return []int64{}
+	case "smallint":
+		return []int16{}
+	case "int32":
+		return []int32{}
+	case "tinyint":
+		return []int8{}
+	case "double", "varint", "decimal", "float64":
+		return []float64{}
+	case "float":
+		return []float32{}
+	default:
+		return []string{}
+	}
 }
 
 // CheckHealth handles health checks sent from Grafana to the plugin.
@@ -195,7 +212,9 @@ func (td *Db2Datasource) CheckHealth(ctx context.Context, req *backend.CheckHeal
 
 	log.DefaultLogger.Warn("Checkhealth() fired")
 
+	instSetting.mu.Lock()
 	db := instSetting.pool.Open(instSetting.constr, "SetConnMaxLifetime=60")
+	instSetting.mu.Unlock()
 	st, err := db.Prepare("select current timestamp from sysibm.sysdummy1")
 
 	if err != nil {
@@ -238,7 +257,10 @@ func (td *Db2Datasource) CheckHealth(ctx context.Context, req *backend.CheckHeal
 		}
 	}
 
+	instSetting.mu.Lock()
 	db.Close()
+	instSetting.mu.Unlock()
+
 	log.DefaultLogger.Warn("CheckHealth - db closed")
 
 	return &backend.CheckHealthResult{
@@ -250,6 +272,7 @@ func (td *Db2Datasource) CheckHealth(ctx context.Context, req *backend.CheckHeal
 
 type instanceSettings struct {
 	pool   db2.Pool
+	mu     sync.Mutex
 	constr string
 	name   string
 }
