@@ -99,6 +99,7 @@ func (td *Db2Datasource) query(ctx context.Context, db *db2.DBP, query backend.D
 	//Prepare response objects.
 	response := backend.DataResponse{}
 	frame := data.NewFrame("response")
+	response.Frames = append(response.Frames, frame)
 
 	// Unmarshal the json into our queryModel.
 	var qm queryModel
@@ -114,14 +115,14 @@ func (td *Db2Datasource) query(ctx context.Context, db *db2.DBP, query backend.D
 
 	// Run the query
 	rows, err := db.Query(qm.QueryText)
-	defer rows.Close()
 
 	if err != nil {
 		log.DefaultLogger.Warn("Query() - Failed running query")
-		log.DefaultLogger.Warn(err.Error())
 		response.Error = err
 		return response
 	}
+
+	defer rows.Close()
 
 	//Get names & types of columns, they will be used as names for the series.
 	columns, err := rows.ColumnTypes()
@@ -155,7 +156,6 @@ func (td *Db2Datasource) query(ctx context.Context, db *db2.DBP, query backend.D
 			log.DefaultLogger.Warn(err.Error())
 
 			emptyResponse := backend.DataResponse{}
-			emptyResponse.Error = err
 
 			return emptyResponse
 		}
@@ -163,13 +163,10 @@ func (td *Db2Datasource) query(ctx context.Context, db *db2.DBP, query backend.D
 		frame.AppendRow(values...)
 	}
 
-	response.Frames = append(response.Frames, frame)
 	return response
 }
 
 func getArrayOfType(typ reflect.Type) interface{} {
-	//log.DefaultLogger.Debug("getArrayOfType", "type", typ.String())
-
 	switch t := typ.String(); t {
 	case "timestamp", "time.Time":
 		return []time.Time{}
