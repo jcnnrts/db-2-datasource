@@ -156,7 +156,7 @@ func (td *Db2Datasource) query(ctx context.Context, db *db2.DBP, query backend.D
 			log.DefaultLogger.Warn(err.Error())
 
 			emptyResponse := backend.DataResponse{}
-
+			emptyResponse.Error = err
 			return emptyResponse
 		}
 
