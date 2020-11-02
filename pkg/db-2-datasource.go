@@ -10,7 +10,7 @@ import (
 
 	_ "database/sql"
 
-	db2 "github.com/ibmdb/go_ibm_db"
+	db2 "github.com/jcnnrts/go_ibm_db"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/datasource"
@@ -69,7 +69,7 @@ func (td *Db2Datasource) QueryData(ctx context.Context, req *backend.QueryDataRe
 
 	//Open DB
 	instSetting.mu.Lock()
-	db := instSetting.pool.Open(instSetting.constr, "SetConnMaxLifetime=90")
+	db := instSetting.pool.Open(instSetting.constr, "SetConnMaxLifetime=0")
 	instSetting.mu.Unlock()
 
 	//log.DefaultLogger.Warn("QueryData() - " + instSetting.name)
@@ -286,7 +286,7 @@ func newDataSourceInstance(setting backend.DataSourceInstanceSettings) (instance
 	log.DefaultLogger.Warn("newDataSourceInstance()", "data", setting.JSONData)
 
 	// Initialize the Db2 connection pool.
-	pl := db2.Pconnect("PoolSize=100")
+	pl := db2.Pconnect(100)
 
 	// Unload the unsecured JSON data in a myDataSourceOptions struct.
 	var dso myDataSourceOptions

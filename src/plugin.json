@@ -21,11 +21,11 @@
     "links": [
       {
         "name": "Website",
-        "url": "https://github.com/grafana/simple-datasource-backend"
+        "url": "https://github.com/jcnnrts/db-2-datasource"
       },
       {
         "name": "License",
-        "url": "https://github.com/grafana/simple-datasource-backend/blob/master/LICENSE"
+        "url": "https://github.com/jcnnrts/db-2-datasource/LICENSE"
       }
     ],
     "screenshots": [],
